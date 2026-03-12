@@ -18,9 +18,10 @@ jobs:
           - os: ubuntu-latest
             platform: linux
             arch: x64
-          - os: macos-13
+          - os: macos-latest
             platform: darwin
             arch: x64
+            cmake-extra: "--CDCMAKE_OSX_ARCHITECTURES=x86_64"
           - os: macos-latest
             platform: darwin
             arch: arm64
@@ -37,9 +38,10 @@ jobs:
       - run: npm install
 
       - name: Build addon
-        run: npx cmake-js compile --CDCMAKE_BUILD_TYPE=Release --CDCMAKE_POLICY_VERSION_MINIMUM=3.5
+        run: npx cmake-js compile --CDCMAKE_BUILD_TYPE=Release --CDCMAKE_POLICY_VERSION_MINIMUM=3.5 ${{ matrix.cmake-extra }}
 
       - name: Test addon
+        if: matrix.cmake-extra == ''
         run: node test.js
 
       - name: Rename artifact
