@@ -8,6 +8,7 @@ on:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
@@ -35,7 +36,7 @@ jobs:
       - run: npm install
 
       - name: Build addon
-        run: npx cmake-js compile --CDCMAKE_BUILD_TYPE=Release
+        run: npx cmake-js compile --CDCMAKE_BUILD_TYPE=Release --CDCMAKE_POLICY_VERSION_MINIMUM=3.5
 
       - name: Rename artifact
         shell: bash
