@@ -168,6 +168,117 @@ Napi::Value BatchIfft(const Napi::CallbackInfo& info) {
 	return output;
 }
 
+// batchFftInto(input: Float32Array, outRe: Float32Array, outIm: Float32Array, fftSize: number, batchCount: number) => undefined
+// Writes into caller-owned outRe/outIm. No allocation, no return value.
+Napi::Value BatchFftInto(const Napi::CallbackInfo& info) {
+	Napi::Env env = info.Env();
+
+	if (info.Length() < 5) {
+		Napi::TypeError::New(env, "Expected 5 arguments: input, outRe, outIm, fftSize, batchCount").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	Napi::Float32Array input = info[0].As<Napi::Float32Array>();
+	Napi::Float32Array out_re = info[1].As<Napi::Float32Array>();
+	Napi::Float32Array out_im = info[2].As<Napi::Float32Array>();
+	int fft_size = info[3].As<Napi::Number>().Int32Value();
+	int batch_count = info[4].As<Napi::Number>().Int32Value();
+	int complex_size = fft_size / 2 + 1;
+
+	if ((int)input.ElementLength() < fft_size * batch_count) {
+		Napi::RangeError::New(env, "Input buffer too small for fftSize * batchCount").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if ((int)out_re.ElementLength() < complex_size * batch_count ||
+	    (int)out_im.ElementLength() < complex_size * batch_count) {
+		Napi::RangeError::New(env, "outRe/outIm buffers too small for (fftSize / 2 + 1) * batchCount").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	fftwf_plan plan = get_fwd_plan(fft_size);
+
+	float* in_buf = fftwf_alloc_real(fft_size);
+	fftwf_complex* out_buf = fftwf_alloc_complex(complex_size);
+
+	float* input_data = input.Data();
+	float* re_data = out_re.Data();
+	float* im_data = out_im.Data();
+
+	for (int b = 0; b < batch_count; b++) {
+		std::memcpy(in_buf, input_data + b * fft_size, fft_size * sizeof(float));
+		fftwf_execute_dft_r2c(plan, in_buf, out_buf);
+
+		int batch_offset = b * complex_size;
+		for (int i = 0; i < complex_size; i++) {
+			re_data[batch_offset + i] = out_buf[i][0];
+			im_data[batch_offset + i] = out_buf[i][1];
+		}
+	}
+
+	fftwf_free(in_buf);
+	fftwf_free(out_buf);
+
+	return env.Undefined();
+}
+
+// batchIfftInto(re: Float32Array, im: Float32Array, outTime: Float32Array, fftSize: number, batchCount: number) => undefined
+// Writes into caller-owned outTime. No allocation, no return value.
+Napi::Value BatchIfftInto(const Napi::CallbackInfo& info) {
+	Napi::Env env = info.Env();
+
+	if (info.Length() < 5) {
+		Napi::TypeError::New(env, "Expected 5 arguments: re, im, outTime, fftSize, batchCount").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	Napi::Float32Array re = info[0].As<Napi::Float32Array>();
+	Napi::Float32Array im = info[1].As<Napi::Float32Array>();
+	Napi::Float32Array out_time = info[2].As<Napi::Float32Array>();
+	int fft_size = info[3].As<Napi::Number>().Int32Value();
+	int batch_count = info[4].As<Napi::Number>().Int32Value();
+	int complex_size = fft_size / 2 + 1;
+
+	if ((int)re.ElementLength() < complex_size * batch_count ||
+	    (int)im.ElementLength() < complex_size * batch_count) {
+		Napi::RangeError::New(env, "re/im buffers too small for (fftSize / 2 + 1) * batchCount").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if ((int)out_time.ElementLength() < fft_size * batch_count) {
+		Napi::RangeError::New(env, "outTime buffer too small for fftSize * batchCount").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	fftwf_plan plan = get_inv_plan(fft_size);
+
+	fftwf_complex* in_buf = fftwf_alloc_complex(complex_size);
+	float* out_buf = fftwf_alloc_real(fft_size);
+
+	float scale = 1.0f / fft_size;
+
+	float* out_data = out_time.Data();
+
+	for (int b = 0; b < batch_count; b++) {
+		int batch_offset = b * complex_size;
+		for (int i = 0; i < complex_size; i++) {
+			in_buf[i][0] = re[batch_offset + i];
+			in_buf[i][1] = im[batch_offset + i];
+		}
+		fftwf_execute_dft_c2r(plan, in_buf, out_buf);
+
+		int out_offset = b * fft_size;
+		for (int i = 0; i < fft_size; i++) {
+			out_data[out_offset + i] = out_buf[i] * scale;
+		}
+	}
+
+	fftwf_free(in_buf);
+	fftwf_free(out_buf);
+
+	return env.Undefined();
+}
+
 // batchFft2D(input: Float32Array, rows: number, cols: number, batchCount: number) => { re: Float32Array, im: Float32Array }
 // Input: rows * cols * batchCount real samples, block-major, row-major within each block (row index outer, col index inner).
 // Output: rows * (cols / 2 + 1) * batchCount complex samples split into parallel re/im arrays, same block-major ordering.
@@ -292,6 +403,8 @@ Napi::Value BatchIfft2D(const Napi::CallbackInfo& info) {
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
 	exports.Set("batchFft", Napi::Function::New(env, BatchFft));
 	exports.Set("batchIfft", Napi::Function::New(env, BatchIfft));
+	exports.Set("batchFftInto", Napi::Function::New(env, BatchFftInto));
+	exports.Set("batchIfftInto", Napi::Function::New(env, BatchIfftInto));
 	exports.Set("batchFft2D", Napi::Function::New(env, BatchFft2D));
 	exports.Set("batchIfft2D", Napi::Function::New(env, BatchIfft2D));
 	return exports;

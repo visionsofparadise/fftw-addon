@@ -58,6 +58,86 @@ test("multiple FFT sizes", () => {
   }
 });
 
+test("batchFftInto round-trip with caller-owned buffers", () => {
+  const fftSize = 1024;
+  const batchCount = 4;
+  const complexSize = fftSize / 2 + 1;
+  const input = new Float32Array(fftSize * batchCount);
+  for (let i = 0; i < input.length; i++) input[i] = Math.random() * 2 - 1;
+  const re = new Float32Array(complexSize * batchCount);
+  const im = new Float32Array(complexSize * batchCount);
+  const result = addon.batchFftInto(input, re, im, fftSize, batchCount);
+  assert(result === undefined, `expected undefined return, got ${result}`);
+  const output = addon.batchIfft(re, im, fftSize, batchCount);
+  const err = maxError(input, output);
+  assert(err < 1e-5, `error ${err}`);
+  console.log(`  max error: ${err.toExponential(2)}`);
+});
+
+test("batchIfftInto round-trip with caller-owned buffer", () => {
+  const fftSize = 1024;
+  const batchCount = 4;
+  const input = new Float32Array(fftSize * batchCount);
+  for (let i = 0; i < input.length; i++) input[i] = Math.random() * 2 - 1;
+  const { re, im } = addon.batchFft(input, fftSize, batchCount);
+  const output = new Float32Array(fftSize * batchCount);
+  const result = addon.batchIfftInto(re, im, output, fftSize, batchCount);
+  assert(result === undefined, `expected undefined return, got ${result}`);
+  const err = maxError(input, output);
+  assert(err < 1e-5, `error ${err}`);
+  console.log(`  max error: ${err.toExponential(2)}`);
+});
+
+test("batchFftInto + batchIfftInto end-to-end round-trip", () => {
+  const fftSize = 2048;
+  const batchCount = 3;
+  const complexSize = fftSize / 2 + 1;
+  const input = new Float32Array(fftSize * batchCount);
+  for (let i = 0; i < input.length; i++) input[i] = Math.sin(i * 0.1) * (i % 7 - 3);
+  const re = new Float32Array(complexSize * batchCount);
+  const im = new Float32Array(complexSize * batchCount);
+  addon.batchFftInto(input, re, im, fftSize, batchCount);
+  const output = new Float32Array(fftSize * batchCount);
+  addon.batchIfftInto(re, im, output, fftSize, batchCount);
+  const err = maxError(input, output);
+  assert(err < 1e-5, `error ${err}`);
+  console.log(`  max error: ${err.toExponential(2)}`);
+});
+
+test("batchFftInto throws RangeError for undersized output buffers", () => {
+  const fftSize = 256;
+  const batchCount = 2;
+  const complexSize = fftSize / 2 + 1;
+  const input = new Float32Array(fftSize * batchCount);
+  const reSmall = new Float32Array(complexSize * batchCount - 1);
+  const im = new Float32Array(complexSize * batchCount);
+  let threw = false;
+  try {
+    addon.batchFftInto(input, reSmall, im, fftSize, batchCount);
+  } catch (e) {
+    threw = true;
+    assert(e instanceof RangeError, `expected RangeError, got ${e.constructor.name}`);
+  }
+  assert(threw, "expected throw for undersized outRe");
+});
+
+test("batchIfftInto throws RangeError for undersized output buffer", () => {
+  const fftSize = 256;
+  const batchCount = 2;
+  const complexSize = fftSize / 2 + 1;
+  const re = new Float32Array(complexSize * batchCount);
+  const im = new Float32Array(complexSize * batchCount);
+  const outSmall = new Float32Array(fftSize * batchCount - 1);
+  let threw = false;
+  try {
+    addon.batchIfftInto(re, im, outSmall, fftSize, batchCount);
+  } catch (e) {
+    threw = true;
+    assert(e instanceof RangeError, `expected RangeError, got ${e.constructor.name}`);
+  }
+  assert(threw, "expected throw for undersized outTime");
+});
+
 test("batchFft2D returns correct shape", () => {
   const rows = 4;
   const cols = 4;
