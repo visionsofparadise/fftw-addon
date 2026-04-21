@@ -58,4 +58,100 @@ test("multiple FFT sizes", () => {
   }
 });
 
+test("batchFft2D returns correct shape", () => {
+  const rows = 4;
+  const cols = 4;
+  const input = new Float32Array(rows * cols).fill(0);
+  input[0] = 1; // impulse at (0, 0)
+  const { re, im } = addon.batchFft2D(input, rows, cols, 1);
+  const complexCols = cols / 2 + 1;
+  assert(re.length === rows * complexCols, `re length ${re.length}`);
+  assert(im.length === rows * complexCols, `im length ${im.length}`);
+  // Impulse at (0,0) -> flat 2D spectrum: all re = 1, all im = 0.
+  for (let i = 0; i < re.length; i++) {
+    assert(Math.abs(re[i] - 1) < 1e-5, `bin ${i} re=${re[i]}`);
+    assert(Math.abs(im[i]) < 1e-5, `bin ${i} im=${im[i]}`);
+  }
+});
+
+test("batchFft2D round-trip 4x4 batched", () => {
+  const rows = 4;
+  const cols = 4;
+  const batchCount = 2;
+  const input = new Float32Array(rows * cols * batchCount);
+  for (let i = 0; i < input.length; i++) input[i] = Math.random() * 2 - 1;
+  const { re, im } = addon.batchFft2D(input, rows, cols, batchCount);
+  const output = addon.batchIfft2D(re, im, rows, cols, batchCount);
+  const err = maxError(input, output);
+  assert(err < 1e-5, `error ${err}`);
+  console.log(`  max error: ${err.toExponential(2)}`);
+});
+
+test("batchFft2D non-square rows=16 cols=32 (DFTT shape)", () => {
+  // Matches the engineering-side DFTT block layout: rows = blockTime = 16,
+  // cols = blockFreq = 32, block-major and row-major (time outer, freq inner)
+  // inside each block. Non-square deliberately to catch any rows/cols swap
+  // between addon and caller.
+  const rows = 16;
+  const cols = 32;
+  const batchCount = 100;
+  const input = new Float32Array(rows * cols * batchCount);
+  for (let i = 0; i < input.length; i++) input[i] = Math.random() * 2 - 1;
+  const { re, im } = addon.batchFft2D(input, rows, cols, batchCount);
+  const complexCols = cols / 2 + 1;
+  assert(
+    re.length === rows * complexCols * batchCount,
+    `re length ${re.length}, expected ${rows * complexCols * batchCount}`,
+  );
+  assert(
+    im.length === rows * complexCols * batchCount,
+    `im length ${im.length}, expected ${rows * complexCols * batchCount}`,
+  );
+  const output = addon.batchIfft2D(re, im, rows, cols, batchCount);
+  assert(
+    output.length === rows * cols * batchCount,
+    `output length ${output.length}`,
+  );
+  const err = maxError(input, output);
+  assert(err < 1e-5, `error ${err}`);
+  console.log(`  max error: ${err.toExponential(2)}`);
+});
+
+test("batchFft2D DC block across multiple 2D sizes", () => {
+  // Each batch element is a constant value; the DFT is an impulse at (0,0)
+  // with magnitude rows * cols, zero elsewhere. Validates the 2D plan cache
+  // handles repeat shapes and distinct shapes in sequence without interference.
+  for (const [rows, cols] of [
+    [8, 8],
+    [16, 32],
+    [32, 16],
+    [4, 8],
+  ]) {
+    const batchCount = 3;
+    const input = new Float32Array(rows * cols * batchCount);
+    for (let b = 0; b < batchCount; b++) {
+      const v = b + 1;
+      for (let i = 0; i < rows * cols; i++) input[b * rows * cols + i] = v;
+    }
+    const { re, im } = addon.batchFft2D(input, rows, cols, batchCount);
+    const complexCols = cols / 2 + 1;
+    const complexBlock = rows * complexCols;
+    for (let b = 0; b < batchCount; b++) {
+      const v = b + 1;
+      const expectedDc = v * rows * cols;
+      assert(
+        Math.abs(re[b * complexBlock] - expectedDc) < 1e-3,
+        `rows=${rows} cols=${cols} b=${b} DC re=${re[b * complexBlock]}, expected ${expectedDc}`,
+      );
+      assert(
+        Math.abs(im[b * complexBlock]) < 1e-3,
+        `rows=${rows} cols=${cols} b=${b} DC im=${im[b * complexBlock]}`,
+      );
+    }
+    const output = addon.batchIfft2D(re, im, rows, cols, batchCount);
+    const err = maxError(input, output);
+    assert(err < 1e-4, `rows=${rows} cols=${cols} error=${err}`);
+  }
+});
+
 process.exit(failed);
